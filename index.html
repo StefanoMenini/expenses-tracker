@@ -435,10 +435,54 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 10px;
         }
 
         .cat-manage-item:last-child {
             border-bottom: none;
+        }
+
+        .cat-manage-main {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .cat-manage-item.is-child {
+            padding-left: 32px;
+        }
+
+        .cat-manage-item.dragging {
+            opacity: 0.6;
+        }
+
+        .cat-manage-item.drop-target {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+
+        .cat-drag-handle {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-right: 8px;
+            cursor: grab;
+        }
+
+        .cat-dropzone {
+            margin: 0 20px 10px;
+            padding: 12px;
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .cat-dropzone.active {
+            border-color: var(--primary);
+            color: var(--primary);
         }
 
         .delete-btn {
@@ -461,6 +505,12 @@
             display: flex;
             gap: 10px;
             margin: 0 20px;
+            flex-wrap: wrap;
+        }
+
+        .add-cat-form input,
+        .add-cat-form select {
+            flex: 1 1 100%;
         }
 
         .add-cat-btn {
@@ -580,6 +630,7 @@
                 </div>
             </div>
             <h3>Categories</h3>
+            <div id="cat-dropzone" class="cat-dropzone">Drop here to make top-level</div>
             <div id="cat-manage-list" class="settings-section cat-manage-list">
                 <!-- Injected via JS -->
             </div>
@@ -667,7 +718,15 @@
         const defaultSettings = {
             currency: 'EUR',
             theme: 'system', // 'light', 'dark', 'system'
-            categories: ["🍔 Food", "🚌 Transport", "🛍️ Shopping", "🎬 Entertainment", "🧾 Bills", "💊 Health", "🔹 Other"]
+            categories: [
+                { id: 'cat_food', name: "🍔 Food", parentId: null },
+                { id: 'cat_transport', name: "🚌 Transport", parentId: null },
+                { id: 'cat_shopping', name: "🛍️ Shopping", parentId: null },
+                { id: 'cat_entertainment', name: "🎬 Entertainment", parentId: null },
+                { id: 'cat_bills', name: "🧾 Bills", parentId: null },
+                { id: 'cat_health', name: "💊 Health", parentId: null },
+                { id: 'cat_other', name: "🔹 Other", parentId: null }
+            ]
         };
         let settings = JSON.parse(localStorage.getItem('settings')) || defaultSettings;
 
@@ -712,7 +771,9 @@
         const themeSelect = document.getElementById('theme-select');
         const currencySelect = document.getElementById('currency-select');
         const catManageList = document.getElementById('cat-manage-list');
+        const catDropzone = document.getElementById('cat-dropzone');
         const newCatName = document.getElementById('new-cat-name');
+        let draggingCatId = null;
 
         // Init
         document.getElementById('date').valueAsDate = new Date();
@@ -720,13 +781,111 @@
 
         // ... (Settings & Theme Logic Unchanged) ...
         function initSettings() {
-            if (!settings.categories || settings.categories.length === 0) settings.categories = defaultSettings.categories;
+            normalizeCategories();
+            migrateExpensesCategories();
             themeSelect.value = settings.theme;
             currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
             applyTheme();
             renderCategoryOptions();
             renderManageCategories();
+        }
+        function makeCategoryId() {
+            return `cat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        }
+        function normalizeCategories() {
+            let changed = false;
+            if (!Array.isArray(settings.categories) || settings.categories.length === 0) {
+                settings.categories = defaultSettings.categories.map(cat => ({ ...cat }));
+                changed = true;
+            }
+            settings.categories = settings.categories.map(cat => {
+                if (typeof cat === 'string') {
+                    changed = true;
+                    return { id: makeCategoryId(), name: cat, parentId: null };
+                }
+                const name = cat.name || cat.label || 'Unnamed';
+                const id = cat.id || makeCategoryId();
+                const parentId = cat.parentId || null;
+                if (id !== cat.id || name !== cat.name || parentId !== cat.parentId) changed = true;
+                return { id, name, parentId };
+            });
+
+            const byId = new Map(settings.categories.map(cat => [cat.id, cat]));
+            settings.categories.forEach(cat => {
+                if (cat.parentId === cat.id) { cat.parentId = null; changed = true; }
+                if (cat.parentId) {
+                    const parent = byId.get(cat.parentId);
+                    if (!parent || parent.parentId) { cat.parentId = null; changed = true; }
+                }
+            });
+
+            if (changed) saveSettings();
+        }
+        function getTopLevelCategories() {
+            return settings.categories.filter(cat => !cat.parentId);
+        }
+        function getChildCategories(parentId) {
+            return settings.categories.filter(cat => cat.parentId === parentId);
+        }
+        function categoryHasChildren(catId) {
+            return settings.categories.some(cat => cat.parentId === catId);
+        }
+        function getCategoryDisplayLabel(cat) {
+            if (!cat) return '';
+            if (cat.parentId) {
+                const parent = settings.categories.find(c => c.id === cat.parentId);
+                if (parent) return `${parent.name} > ${cat.name}`;
+            }
+            return cat.name;
+        }
+        function getCategoryLabelById(categoryId) {
+            const cat = settings.categories.find(c => c.id === categoryId);
+            return cat ? getCategoryDisplayLabel(cat) : '';
+        }
+        function getExpenseCategoryLabel(expense) {
+            if (expense.categoryId) {
+                const label = getCategoryLabelById(expense.categoryId);
+                if (label) return label;
+            }
+            if (expense.categoryLabel) return expense.categoryLabel;
+            return expense.category || 'Uncategorized';
+        }
+        function migrateExpensesCategories() {
+            let settingsChanged = false;
+            let expensesChanged = false;
+            const categoryByName = new Map(settings.categories.map(cat => [cat.name, cat]));
+
+            expenses.forEach(expense => {
+                if (!expense.categoryId && expense.category) {
+                    if (categoryByName.has(expense.category)) {
+                        expense.categoryId = categoryByName.get(expense.category).id;
+                        expensesChanged = true;
+                    } else {
+                        const newCat = { id: makeCategoryId(), name: expense.category, parentId: null };
+                        settings.categories.push(newCat);
+                        categoryByName.set(newCat.name, newCat);
+                        expense.categoryId = newCat.id;
+                        settingsChanged = true;
+                        expensesChanged = true;
+                    }
+                }
+                if (!expense.categoryLabel) {
+                    if (expense.category) {
+                        expense.categoryLabel = expense.category;
+                        expensesChanged = true;
+                    } else if (expense.categoryId) {
+                        const label = getCategoryLabelById(expense.categoryId);
+                        if (label) {
+                            expense.categoryLabel = label;
+                            expensesChanged = true;
+                        }
+                    }
+                }
+            });
+
+            if (settingsChanged) saveSettings();
+            if (expensesChanged) saveExpenses();
         }
         function saveSettings() { localStorage.setItem('settings', JSON.stringify(settings)); }
         function convertAmount(amount, fromCurrency, toCurrency) {
@@ -753,23 +912,155 @@
         function updateCurrency() { settings.currency = currencySelect.value; saveSettings(); if (currencyInput) currencyInput.value = settings.currency; renderRecap(); }
         function renderCategoryOptions() {
             catInput.innerHTML = '';
-            settings.categories.forEach(cat => { const opt = document.createElement('option'); opt.value = cat; opt.textContent = cat; catInput.appendChild(opt); });
+            const topLevel = getTopLevelCategories();
+            topLevel.forEach(parent => {
+                const parentOpt = document.createElement('option');
+                parentOpt.value = parent.id;
+                parentOpt.textContent = parent.name;
+                catInput.appendChild(parentOpt);
+
+                const children = getChildCategories(parent.id);
+                children.forEach(child => {
+                    const opt = document.createElement('option');
+                    opt.value = child.id;
+                    opt.textContent = `${parent.name} > ${child.name}`;
+                    catInput.appendChild(opt);
+                });
+            });
         }
         function renderManageCategories() {
             catManageList.innerHTML = '';
-            settings.categories.forEach((cat, index) => {
-                const el = document.createElement('div');
-                el.className = 'cat-manage-item';
-                el.innerHTML = `<span>${cat}</span><button class="delete-btn" onclick="removeCategory(${index})">×</button>`;
-                catManageList.appendChild(el);
+            const topLevel = getTopLevelCategories();
+            topLevel.forEach(parent => {
+                catManageList.appendChild(buildCategoryItem(parent, 0));
+                getChildCategories(parent.id).forEach(child => {
+                    catManageList.appendChild(buildCategoryItem(child, 1));
+                });
             });
         }
         function addCategory() {
             const val = newCatName.value.trim();
-            if (val && !settings.categories.includes(val)) { settings.categories.push(val); saveSettings(); renderCategoryOptions(); renderManageCategories(); newCatName.value = ''; }
+            if (!val) return;
+            const exists = settings.categories.some(cat => cat.name.toLowerCase() === val.toLowerCase());
+            if (exists) return;
+            settings.categories.push({ id: makeCategoryId(), name: val, parentId: null });
+            saveSettings();
+            renderCategoryOptions();
+            renderManageCategories();
+            newCatName.value = '';
         }
         function removeCategory(index) {
-            showConfirmModal('category', index, settings.categories[index]);
+            const cat = settings.categories.find(c => c.id === index);
+            if (!cat) return;
+            showConfirmModal('category', index, cat.name);
+        }
+        function updateCategoryParent(catId, parentId) {
+            const cat = settings.categories.find(c => c.id === catId);
+            if (!cat) return;
+            if (categoryHasChildren(catId)) {
+                alert('This category has subcategories. Move or remove them first.');
+                renderManageCategories();
+                return;
+            }
+            if (!parentId) {
+                cat.parentId = null;
+            } else {
+                const parent = settings.categories.find(c => c.id === parentId);
+                cat.parentId = (!parent || parent.parentId || parent.id === catId) ? null : parentId;
+            }
+            saveSettings();
+            renderCategoryOptions();
+            renderManageCategories();
+            renderRecap();
+        }
+        function buildCategoryItem(cat, depth) {
+            const el = document.createElement('div');
+            el.className = `cat-manage-item${depth === 1 ? ' is-child' : ''}`;
+            el.draggable = true;
+            el.dataset.catId = cat.id;
+
+            const nameWrap = document.createElement('div');
+            nameWrap.className = 'cat-manage-main';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = getCategoryDisplayLabel(cat);
+            nameWrap.appendChild(nameSpan);
+
+            const handle = document.createElement('span');
+            handle.className = 'cat-drag-handle';
+            handle.textContent = '↕';
+            nameSpan.prepend(handle);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'delete-btn';
+            delBtn.textContent = '×';
+            delBtn.onclick = () => removeCategory(cat.id);
+
+            el.appendChild(nameWrap);
+            el.appendChild(delBtn);
+
+            el.addEventListener('dragstart', onCategoryDragStart);
+            el.addEventListener('dragend', onCategoryDragEnd);
+            el.addEventListener('dragover', onCategoryDragOver);
+            el.addEventListener('dragleave', onCategoryDragLeave);
+            el.addEventListener('drop', onCategoryDrop);
+
+            return el;
+        }
+        function canSetParent(dragId, targetId) {
+            if (!dragId || !targetId) return false;
+            if (dragId === targetId) return false;
+            if (categoryHasChildren(dragId)) return false;
+            const target = settings.categories.find(c => c.id === targetId);
+            if (!target || target.parentId) return false;
+            return true;
+        }
+        function onCategoryDragStart(e) {
+            const catId = e.currentTarget.dataset.catId;
+            draggingCatId = catId;
+            e.dataTransfer.setData('text/plain', catId);
+            e.dataTransfer.effectAllowed = 'move';
+            e.currentTarget.classList.add('dragging');
+        }
+        function onCategoryDragEnd(e) {
+            draggingCatId = null;
+            e.currentTarget.classList.remove('dragging');
+            catManageList.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+            if (catDropzone) catDropzone.classList.remove('active');
+        }
+        function onCategoryDragOver(e) {
+            const targetId = e.currentTarget.dataset.catId;
+            const dragId = draggingCatId;
+            if (canSetParent(dragId, targetId)) {
+                e.preventDefault();
+                e.currentTarget.classList.add('drop-target');
+            }
+        }
+        function onCategoryDragLeave(e) {
+            e.currentTarget.classList.remove('drop-target');
+        }
+        function onCategoryDrop(e) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drop-target');
+            const targetId = e.currentTarget.dataset.catId;
+            const dragId = draggingCatId;
+            if (canSetParent(dragId, targetId)) {
+                updateCategoryParent(dragId, targetId);
+            }
+        }
+        if (catDropzone) {
+            catDropzone.addEventListener('dragover', (e) => {
+                if (!draggingCatId) return;
+                e.preventDefault();
+                catDropzone.classList.add('active');
+            });
+            catDropzone.addEventListener('dragleave', () => {
+                catDropzone.classList.remove('active');
+            });
+            catDropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                catDropzone.classList.remove('active');
+                if (draggingCatId) updateCategoryParent(draggingCatId, '');
+            });
         }
 
         // --- Google Sync Logic ---
@@ -893,7 +1184,7 @@
                     const converted = convertAmount(e.amount, e.currency || settings.currency, settings.currency);
                     return [
                         e.date,
-                        e.category,
+                        getExpenseCategoryLabel(e),
                         e.note || "",
                         e.amount,
                         e.currency || settings.currency,
@@ -1039,7 +1330,18 @@
 
         function addExpense(e) {
             e.preventDefault();
-            const expense = { id: Date.now(), amount: parseFloat(amountInput.value), currency: currencyInput ? currencyInput.value : settings.currency, category: catInput.value, date: dateInput.value, note: noteInput.value };
+            const selectedOption = catInput.options[catInput.selectedIndex];
+            const categoryLabel = selectedOption ? selectedOption.textContent : '';
+            const expense = {
+                id: Date.now(),
+                amount: parseFloat(amountInput.value),
+                currency: currencyInput ? currencyInput.value : settings.currency,
+                categoryId: catInput.value,
+                categoryLabel: categoryLabel,
+                category: categoryLabel,
+                date: dateInput.value,
+                note: noteInput.value
+            };
             expenses.unshift(expense); saveExpenses();
             amountInput.value = ''; noteInput.value = ''; dateInput.valueAsDate = new Date();
             const btn = form.querySelector('button'); const originalText = btn.textContent; btn.textContent = 'Saved!'; btn.style.background = '#32d74b';
@@ -1066,7 +1368,11 @@
                 bodyEl.textContent = "This action cannot be undone.";
             } else if (type === 'category') {
                 titleEl.textContent = "Delete Category?";
-                bodyEl.textContent = `Delete "${name}" and remove it from list?`;
+                const cat = settings.categories.find(c => c.id === id);
+                const hasChildren = cat ? categoryHasChildren(cat.id) : false;
+                bodyEl.textContent = hasChildren
+                    ? `Delete "${name}"? Subcategories will be moved to top-level.`
+                    : `Delete "${name}" and remove it from list?`;
             } else if (type === 'restore') {
                 titleEl.textContent = "Restore Data?";
                 bodyEl.textContent = "This will OVERWRITE all current data with the backup file.";
@@ -1090,7 +1396,12 @@
                 expenses = expenses.filter(e => e.id !== pendingAction.id);
                 saveExpenses();
             } else if (pendingAction.type === 'category') {
-                settings.categories.splice(pendingAction.id, 1);
+                const idx = settings.categories.findIndex(c => c.id === pendingAction.id);
+                if (idx !== -1) {
+                    const catId = settings.categories[idx].id;
+                    settings.categories.forEach(c => { if (c.parentId === catId) c.parentId = null; });
+                    settings.categories.splice(idx, 1);
+                }
                 saveSettings();
                 renderCategoryOptions();
                 renderManageCategories();
@@ -1128,7 +1439,11 @@
 
             // Categories (All filtered)
             const cats = {};
-            filtered.forEach(item => { const val = convertAmount(item.amount, item.currency || settings.currency, settings.currency); cats[item.category] = (cats[item.category] || 0) + val; });
+            filtered.forEach(item => {
+                const val = convertAmount(item.amount, item.currency || settings.currency, settings.currency);
+                const label = getExpenseCategoryLabel(item);
+                cats[label] = (cats[label] || 0) + val;
+            });
             const sortedCats = Object.entries(cats).sort((a, b) => b[1] - a[1]);
             catBreakdown.innerHTML = '';
             if (sortedCats.length === 0) { catBreakdown.innerHTML = '<div style="color:var(--text-muted); text-align:center; font-size:14px;">No data for period</div>'; }
@@ -1148,7 +1463,7 @@
                 let amountHtml = `<div class="expense-amount">${formatCurrency(converted, settings.currency)}</div>`;
                 if (isDifferent) { amountHtml += `<div style="font-size:12px; color:var(--text-muted); text-align:right;">${formatCurrency(item.amount, itemCurrency)}</div>`; }
                 el.innerHTML = `
-                    <div class="expense-info"><span class="expense-cat">${item.category}</span><span class="expense-date">${item.date} ${item.note ? '• ' + item.note : ''}</span></div>
+                    <div class="expense-info"><span class="expense-cat">${getExpenseCategoryLabel(item)}</span><span class="expense-date">${item.date} ${item.note ? '• ' + item.note : ''}</span></div>
                     <div style="display:flex; align-items:center; gap:10px;">
                         <div>${amountHtml}</div>
                         <button onclick="showConfirmModal('expense', ${item.id})" ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()" style="background:none; border:none; color:var(--text-muted); font-size:20px; padding:0 5px; cursor:pointer;" >×</button>
