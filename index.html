@@ -210,6 +210,28 @@
             border-radius: 4px;
         }
 
+        .cat-sublist {
+            margin-top: 8px;
+            padding-left: 16px;
+        }
+
+        .cat-subitem {
+            margin-bottom: 10px;
+        }
+
+        .cat-subitem .cat-bar-bg {
+            height: 6px;
+        }
+
+        .cat-toggle {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 6px;
+        }
+
         .expense-list {
             padding: 0 20px;
         }
@@ -743,6 +765,7 @@
 
         let currentDate = new Date();
         let viewMode = 'month'; // 'month' or 'year'
+        let expandedCategories = new Set();
 
         // Pagination State
         let displayLimit = 50;
@@ -1437,17 +1460,116 @@
             const total = filtered.reduce((sum, item) => sum + convertAmount(item.amount, item.currency || settings.currency, settings.currency), 0);
             totalDisplay.textContent = formatCurrency(total, settings.currency);
 
-            // Categories (All filtered)
-            const cats = {};
+            // Categories (All filtered, aggregated by top-level)
+            const parentTotals = {};
+            const parentLabels = {};
+            const childTotals = {};
             filtered.forEach(item => {
                 const val = convertAmount(item.amount, item.currency || settings.currency, settings.currency);
-                const label = getExpenseCategoryLabel(item);
-                cats[label] = (cats[label] || 0) + val;
+                let parentKey = null;
+                let parentLabel = null;
+                let childKey = null;
+                let childLabel = null;
+
+                if (item.categoryId) {
+                    const cat = settings.categories.find(c => c.id === item.categoryId);
+                    if (cat && cat.parentId) {
+                        const parent = settings.categories.find(c => c.id === cat.parentId);
+                        if (parent) {
+                            parentKey = parent.id;
+                            parentLabel = parent.name;
+                            childKey = cat.id;
+                            childLabel = cat.name;
+                        }
+                    } else if (cat) {
+                        parentKey = cat.id;
+                        parentLabel = cat.name;
+                    }
+                }
+
+                if (!parentKey) {
+                    parentLabel = getExpenseCategoryLabel(item);
+                    parentKey = parentLabel;
+                }
+
+                parentTotals[parentKey] = (parentTotals[parentKey] || 0) + val;
+                parentLabels[parentKey] = parentLabel;
+
+                if (childKey) {
+                    if (!childTotals[parentKey]) childTotals[parentKey] = {};
+                    childTotals[parentKey][childKey] = (childTotals[parentKey][childKey] || 0) + val;
+                    if (!parentLabels[childKey]) parentLabels[childKey] = childLabel;
+                }
             });
-            const sortedCats = Object.entries(cats).sort((a, b) => b[1] - a[1]);
+
+            const sortedParents = Object.entries(parentTotals).sort((a, b) => b[1] - a[1]);
             catBreakdown.innerHTML = '';
-            if (sortedCats.length === 0) { catBreakdown.innerHTML = '<div style="color:var(--text-muted); text-align:center; font-size:14px;">No data for period</div>'; }
-            else { const maxVal = sortedCats[0][1]; sortedCats.forEach(([name, val]) => { const percent = (val / total) * 100; const barWidth = (val / maxVal) * 100; const el = document.createElement('div'); el.className = 'cat-item'; el.innerHTML = `<div class="cat-header"><span>${name}</span><span>${formatCurrency(val, settings.currency)} (${Math.round(percent)}%)</span></div><div class="cat-bar-bg"><div class="cat-bar-fill" style="width: ${barWidth}%"></div></div>`; catBreakdown.appendChild(el); }); }
+            if (sortedParents.length === 0) {
+                catBreakdown.innerHTML = '<div style="color:var(--text-muted); text-align:center; font-size:14px;">No data for period</div>';
+            } else {
+                const maxVal = sortedParents[0][1];
+                sortedParents.forEach(([parentKey, val]) => {
+                    const percent = total ? (val / total) * 100 : 0;
+                    const barWidth = maxVal ? (val / maxVal) * 100 : 0;
+                    const children = childTotals[parentKey] || {};
+                    const hasChildren = Object.keys(children).length > 0;
+                    const isExpanded = expandedCategories.has(parentKey);
+
+                    const el = document.createElement('div');
+                    el.className = 'cat-item';
+
+                    const header = document.createElement('div');
+                    header.className = 'cat-header';
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = parentLabels[parentKey] || parentKey;
+                    const totalSpan = document.createElement('span');
+                    totalSpan.textContent = `${formatCurrency(val, settings.currency)} (${Math.round(percent)}%)`;
+
+                    if (hasChildren) {
+                        const toggle = document.createElement('button');
+                        toggle.className = 'cat-toggle';
+                        toggle.textContent = isExpanded ? 'Hide' : 'Show';
+                        toggle.onclick = () => {
+                            if (expandedCategories.has(parentKey)) expandedCategories.delete(parentKey);
+                            else expandedCategories.add(parentKey);
+                            renderRecap();
+                        };
+                        nameSpan.appendChild(toggle);
+                    }
+
+                    header.appendChild(nameSpan);
+                    header.appendChild(totalSpan);
+
+                    const barBg = document.createElement('div');
+                    barBg.className = 'cat-bar-bg';
+                    const barFill = document.createElement('div');
+                    barFill.className = 'cat-bar-fill';
+                    barFill.style.width = `${barWidth}%`;
+                    barBg.appendChild(barFill);
+
+                    el.appendChild(header);
+                    el.appendChild(barBg);
+
+                    if (hasChildren && isExpanded) {
+                        const sublist = document.createElement('div');
+                        sublist.className = 'cat-sublist';
+                        const sortedChildren = Object.entries(children).sort((a, b) => b[1] - a[1]);
+                        sortedChildren.forEach(([childKey, childVal]) => {
+                            const childPercent = val ? (childVal / val) * 100 : 0;
+                            const childItem = document.createElement('div');
+                            childItem.className = 'cat-subitem';
+                            childItem.innerHTML = `
+                                <div class="cat-header"><span>${parentLabels[childKey] || childKey}</span><span>${formatCurrency(childVal, settings.currency)} (${Math.round(childPercent)}%)</span></div>
+                                <div class="cat-bar-bg"><div class="cat-bar-fill" style="width: ${childPercent}%"></div></div>
+                            `;
+                            sublist.appendChild(childItem);
+                        });
+                        el.appendChild(sublist);
+                    }
+
+                    catBreakdown.appendChild(el);
+                });
+            }
 
             // History (Paginated)
             historyList.innerHTML = '';
