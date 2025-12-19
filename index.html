@@ -1133,7 +1133,7 @@
 
         // --- Google Sync Logic ---
         const GOOGLE_CLIENT_ID = '651029165808-i8oqtlff77evius3g28ua3hjb05jmlsg.apps.googleusercontent.com'; // User must provide this if hosting
-        const GOOGLE_SCOPES = 'openid profile email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+        const GOOGLE_SCOPES = 'openid profile email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly';
         const GOOGLE_SHEET_TITLE = 'Expense Tracker Backup';
         const GOOGLE_SHEET_TAB = 'Expenses';
         let tokenClient;
@@ -1251,7 +1251,10 @@
             try {
                 const resp = await gapi.client.drive.files.list({
                     q: `name='${GOOGLE_SHEET_TITLE}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
-                    fields: 'files(id,name)'
+                    fields: 'files(id,name,modifiedTime)',
+                    orderBy: 'modifiedTime desc',
+                    pageSize: 1,
+                    spaces: 'drive'
                 });
                 if (resp.result.files && resp.result.files.length > 0) {
                     return resp.result.files[0].id;
