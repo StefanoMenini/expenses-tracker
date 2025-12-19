@@ -581,11 +581,7 @@
                         <select id="expense-currency" style="font-size: 18px; font-weight:600; padding:16px 8px;">
                             <option value="EUR">EUR</option>
                             <option value="USD">USD</option>
-                            <option value="GBP">GBP</option>
                             <option value="JPY">JPY</option>
-                            <option value="CAD">CAD</option>
-                            <option value="AUD">AUD</option>
-                            <option value="INR">INR</option>
                         </select>
                     </div>
                 </div>
@@ -653,20 +649,6 @@
             </div>
 
 
-            <h3>Currency</h3>
-            <div class="settings-section">
-                <div class="form-group" style="margin:0; padding:10px;">
-                    <select id="currency-select" onchange="updateCurrency()">
-                        <option value="EUR">EUR (€)</option>
-                        <option value="USD">USD ($)</option>
-                        <option value="GBP">GBP (£)</option>
-                        <option value="JPY">JPY (¥)</option>
-                        <option value="CAD">CAD ($)</option>
-                        <option value="AUD">AUD ($)</option>
-                        <option value="INR">INR (₹)</option>
-                    </select>
-                </div>
-            </div>
             <h3>Categories</h3>
             <div id="cat-dropzone" class="cat-dropzone">Drop here to make top-level</div>
             <div id="cat-manage-list" class="settings-section cat-manage-list">
@@ -800,7 +782,8 @@
                 { id: 'cat_23', name: "☕️ Caffè", parentId: 'cat_4' },
                 { id: 'cat_24', name: "🥐 Merende", parentId: 'cat_4' },
                 { id: 'cat_25', name: "💸 Utenze", parentId: 'cat_5' },
-                { id: 'cat_26', name: "📝 Assicurazione", parentId: 'cat_5' }
+                { id: 'cat_26', name: "📝 Assicurazione", parentId: 'cat_5' },
+                { id: 'cat_27', name: "🛍️ Shopping", parentId: null },
             ]
         };
         let settings = JSON.parse(localStorage.getItem('settings')) || defaultSettings;
@@ -809,11 +792,7 @@
         const EXCHANGE_RATES = {
             'EUR': 1.00,
             'USD': 1.09,
-            'GBP': 0.86,
-            'JPY': 163.0,
-            'CAD': 1.48,
-            'AUD': 1.65,
-            'INR': 90.0
+            'JPY': 163.0
         };
 
         let currentDate = new Date();
@@ -847,7 +826,6 @@
         const googleGate = document.getElementById('google-gate');
 
         const themeSelect = document.getElementById('theme-select');
-        const currencySelect = document.getElementById('currency-select');
         const catManageList = document.getElementById('cat-manage-list');
         const catDropzone = document.getElementById('cat-dropzone');
         const newCatName = document.getElementById('new-cat-name');
@@ -865,9 +843,12 @@
             if (!settings.googleSheetTabTitle) settings.googleSheetTabTitle = null;
             if (!settings.googleSheetHasHeader) settings.googleSheetHasHeader = false;
             if (!settings.googleInitialSyncDone) settings.googleInitialSyncDone = false;
+            if (settings.currency !== 'EUR') {
+                settings.currency = 'EUR';
+                saveSettings();
+            }
             localStorage.removeItem('expenses');
             themeSelect.value = settings.theme;
-            currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
             applyTheme();
             renderCategoryOptions();
@@ -1048,7 +1029,6 @@
             }
             document.body.setAttribute('data-theme', targetTheme);
         }
-        function updateCurrency() { settings.currency = currencySelect.value; saveSettings(); if (currencyInput) currencyInput.value = settings.currency; renderRecap(); }
         function renderCategoryOptions() {
             catInput.innerHTML = '';
             const topLevel = getTopLevelCategories();
