@@ -806,6 +806,9 @@
         function initSettings() {
             normalizeCategories();
             migrateExpensesCategories();
+            if (!settings.googleSheetId) settings.googleSheetId = null;
+            if (!settings.googleSheetTabTitle) settings.googleSheetTabTitle = null;
+            if (!settings.googleSheetHasHeader) settings.googleSheetHasHeader = false;
             themeSelect.value = settings.theme;
             currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
@@ -1089,6 +1092,8 @@
         // --- Google Sync Logic ---
         const GOOGLE_CLIENT_ID = '651029165808-i8oqtlff77evius3g28ua3hjb05jmlsg.apps.googleusercontent.com'; // User must provide this if hosting
         const GOOGLE_SCOPES = 'openid profile email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+        const GOOGLE_SHEET_TITLE = 'Expense Tracker Backup';
+        const GOOGLE_SHEET_TAB = 'Expenses';
         let tokenClient;
         let gapiInited = false;
         let gisInited = false;
@@ -1182,6 +1187,54 @@
             }
         }
 
+        function buildExpenseRow(expense) {
+            const converted = convertAmount(expense.amount, expense.currency || settings.currency, settings.currency);
+            return [
+                expense.date,
+                getExpenseCategoryLabel(expense),
+                expense.note || "",
+                expense.amount,
+                expense.currency || settings.currency,
+                converted.toFixed(2),
+                settings.currency
+            ];
+        }
+
+        async function ensureGoogleSheet() {
+            if (settings.googleSheetId) {
+                try {
+                    const sheetResp = await gapi.client.sheets.spreadsheets.get({
+                        spreadsheetId: settings.googleSheetId,
+                        fields: 'sheets.properties.title'
+                    });
+                    const tabTitle = sheetResp.result.sheets && sheetResp.result.sheets[0]
+                        ? sheetResp.result.sheets[0].properties.title
+                        : GOOGLE_SHEET_TAB;
+                    settings.googleSheetTabTitle = tabTitle;
+                    saveSettings();
+                    return settings.googleSheetId;
+                } catch (err) {
+                    console.warn("Sheet lookup failed, creating a new one.", err);
+                    settings.googleSheetId = null;
+                    settings.googleSheetTabTitle = null;
+                    settings.googleSheetHasHeader = false;
+                    saveSettings();
+                }
+            }
+
+            const createResp = await gapi.client.sheets.spreadsheets.create({
+                properties: { title: GOOGLE_SHEET_TITLE },
+                sheets: [{ properties: { title: GOOGLE_SHEET_TAB } }]
+            });
+            settings.googleSheetId = createResp.result.spreadsheetId;
+            settings.googleSheetTabTitle = createResp.result.sheets && createResp.result.sheets[0]
+                ? createResp.result.sheets[0].properties.title
+                : GOOGLE_SHEET_TAB;
+            settings.googleSheetHasHeader = false;
+            saveSettings();
+            return settings.googleSheetId;
+        }
+
         async function exportToGoogleSheet() {
             if (!settings.googleUserInfo) { handleGoogleAuth(); return; }
 
@@ -1191,36 +1244,18 @@
             btn.disabled = true;
 
             try {
-                // Ensure we have a valid token
-                // In a real app, we'd check expiry. Here access_token is in gapi.client
-                // 1. Create Folder (Optional, skipping for simplicity, root of Drive)
-                // 2. Create Sheet
-                const title = `Expense Tracker Backup ${new Date().toISOString().slice(0, 10)}`;
-                const createResp = await gapi.client.sheets.spreadsheets.create({
-                    properties: { title: title }
-                });
-                const spreadsheetId = createResp.result.spreadsheetId;
-                const sheetTitle = createResp.result.sheets && createResp.result.sheets[0]
-                    ? createResp.result.sheets[0].properties.title
-                    : 'Sheet1';
+                const spreadsheetId = await ensureGoogleSheet();
+                const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
 
-                // 3. Prepare Data
                 const headers = ["Date", "Category", "Note", "Amount", "Currency", "Converted Amount", "Main Currency"];
-                const rows = expenses.map(e => {
-                    const converted = convertAmount(e.amount, e.currency || settings.currency, settings.currency);
-                    return [
-                        e.date,
-                        getExpenseCategoryLabel(e),
-                        e.note || "",
-                        e.amount,
-                        e.currency || settings.currency,
-                        converted.toFixed(2),
-                        settings.currency
-                    ];
-                });
+                const rows = expenses.map(buildExpenseRow);
                 const values = [headers, ...rows];
 
-                // 4. Write Data
+                await gapi.client.sheets.spreadsheets.values.clear({
+                    spreadsheetId: spreadsheetId,
+                    range: `${sheetTitle}!A1:Z`
+                });
+
                 await gapi.client.sheets.spreadsheets.values.update({
                     spreadsheetId: spreadsheetId,
                     range: `${sheetTitle}!A1`,
@@ -1228,13 +1263,40 @@
                     resource: { values: values }
                 });
 
-                alert(`Success! Saved to "${title}" in your Google Drive.`);
+                settings.googleSheetHasHeader = true;
+                saveSettings();
+                alert(`Success! Saved to "${GOOGLE_SHEET_TITLE}" in your Google Drive.`);
             } catch (err) {
                 console.error("Sync Error", err);
                 alert("Sync failed. See console for details.");
             } finally {
                 btn.textContent = originalText;
                 btn.disabled = false;
+            }
+        }
+
+        async function autoAppendExpense(expense) {
+            if (!settings.googleUserInfo) return;
+            if (gapi.client.getToken() === null) return;
+
+            try {
+                const spreadsheetId = await ensureGoogleSheet();
+                const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
+
+                if (!settings.googleSheetHasHeader) {
+                    await exportToGoogleSheet();
+                    return;
+                }
+
+                await gapi.client.sheets.spreadsheets.values.append({
+                    spreadsheetId: spreadsheetId,
+                    range: `${sheetTitle}!A1`,
+                    valueInputOption: 'USER_ENTERED',
+                    insertDataOption: 'INSERT_ROWS',
+                    resource: { values: [buildExpenseRow(expense)] }
+                });
+            } catch (err) {
+                console.error("Auto-sync Error", err);
             }
         }
 
@@ -1369,6 +1431,7 @@
                 note: noteInput.value
             };
             expenses.unshift(expense); saveExpenses();
+            autoAppendExpense(expense);
             amountInput.value = ''; noteInput.value = ''; dateInput.valueAsDate = new Date();
             const btn = form.querySelector('button'); const originalText = btn.textContent; btn.textContent = 'Saved!'; btn.style.background = '#32d74b';
             setTimeout(() => { btn.textContent = originalText; btn.style.background = ''; }, 1500);
