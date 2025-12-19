@@ -766,6 +766,7 @@
         let currentDate = new Date();
         let viewMode = 'month'; // 'month' or 'year'
         let expandedCategories = new Set();
+        let isOnline = navigator.onLine;
 
         // Pagination State
         let displayLimit = 50;
@@ -809,12 +810,20 @@
             if (!settings.googleSheetId) settings.googleSheetId = null;
             if (!settings.googleSheetTabTitle) settings.googleSheetTabTitle = null;
             if (!settings.googleSheetHasHeader) settings.googleSheetHasHeader = false;
+            if (!settings.googleInitialSyncDone) settings.googleInitialSyncDone = false;
             themeSelect.value = settings.theme;
             currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
             applyTheme();
             renderCategoryOptions();
             renderManageCategories();
+        }
+        function ensureOnlineForEdits() {
+            if (!isOnline) {
+                alert('You are offline. Edits are disabled until you are back online.');
+                return false;
+            }
+            return true;
         }
         function makeCategoryId() {
             return `cat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -876,6 +885,36 @@
             }
             if (expense.categoryLabel) return expense.categoryLabel;
             return expense.category || 'Uncategorized';
+        }
+        function getOrCreateCategoryForLabel(label) {
+            if (!label) return null;
+            const trimmed = label.trim();
+            if (!trimmed) return null;
+            const existing = settings.categories.find(cat => cat.name === trimmed);
+            if (existing) return existing;
+
+            if (trimmed.includes('>')) {
+                const parts = trimmed.split('>').map(part => part.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                    const parentName = parts[0];
+                    const childName = parts.slice(1).join(' > ');
+                    let parent = settings.categories.find(cat => cat.name === parentName && !cat.parentId);
+                    if (!parent) {
+                        parent = { id: makeCategoryId(), name: parentName, parentId: null };
+                        settings.categories.push(parent);
+                    }
+                    let child = settings.categories.find(cat => cat.name === childName && cat.parentId === parent.id);
+                    if (!child) {
+                        child = { id: makeCategoryId(), name: childName, parentId: parent.id };
+                        settings.categories.push(child);
+                    }
+                    return child;
+                }
+            }
+
+            const newCat = { id: makeCategoryId(), name: trimmed, parentId: null };
+            settings.categories.push(newCat);
+            return newCat;
         }
         function migrateExpensesCategories() {
             let settingsChanged = false;
@@ -965,6 +1004,7 @@
             });
         }
         function addCategory() {
+            if (!ensureOnlineForEdits()) return;
             const val = newCatName.value.trim();
             if (!val) return;
             const exists = settings.categories.some(cat => cat.name.toLowerCase() === val.toLowerCase());
@@ -976,11 +1016,13 @@
             newCatName.value = '';
         }
         function removeCategory(index) {
+            if (!ensureOnlineForEdits()) return;
             const cat = settings.categories.find(c => c.id === index);
             if (!cat) return;
             showConfirmModal('category', index, cat.name);
         }
         function updateCategoryParent(catId, parentId) {
+            if (!ensureOnlineForEdits()) return;
             const cat = settings.categories.find(c => c.id === catId);
             if (!cat) return;
             if (categoryHasChildren(catId)) {
@@ -1102,6 +1144,7 @@
             // Optional: Auto-login check if needed
             if (gapiInited && gisInited && settings.googleUserInfo) {
                 updateGoogleUI(true);
+                attemptBackgroundSync();
             }
         }
 
@@ -1109,7 +1152,10 @@
             gapi.load('client', async () => {
                 await gapi.client.init({
                     // apiKey: 'YOUR_API_KEY', // Optional
-                    discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'],
+                    discoveryDocs: [
+                        'https://sheets.googleapis.com/$discovery/rest?version=v4',
+                        'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
+                    ],
                 });
                 gapiInited = true;
                 checkGoogleReady();
@@ -1163,6 +1209,7 @@
                 // Success
                 await fetchGoogleProfile(resp.access_token);
                 updateGoogleUI(true);
+                await handleInitialGoogleSync();
                 // Auto-sync after login?
                 // exportToGoogleSheet(); 
             };
@@ -1200,6 +1247,21 @@
             ];
         }
 
+        async function findExistingSheetId() {
+            try {
+                const resp = await gapi.client.drive.files.list({
+                    q: `name='${GOOGLE_SHEET_TITLE}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
+                    fields: 'files(id,name)'
+                });
+                if (resp.result.files && resp.result.files.length > 0) {
+                    return resp.result.files[0].id;
+                }
+            } catch (err) {
+                console.warn("Drive lookup failed", err);
+            }
+            return null;
+        }
+
         async function ensureGoogleSheet() {
             if (settings.googleSheetId) {
                 try {
@@ -1233,6 +1295,105 @@
             settings.googleSheetHasHeader = false;
             saveSettings();
             return settings.googleSheetId;
+        }
+
+        async function fetchSheetValues(spreadsheetId) {
+            const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
+            const resp = await gapi.client.sheets.spreadsheets.values.get({
+                spreadsheetId: spreadsheetId,
+                range: `${sheetTitle}!A1:Z`
+            });
+            return resp.result.values || [];
+        }
+
+        function parseExpensesFromSheet(values) {
+            if (!values || values.length === 0) return [];
+            const rows = values.slice(1);
+            const parsed = [];
+            rows.forEach((row, index) => {
+                if (!row || row.length < 4) return;
+                const amount = parseFloat(row[3]);
+                if (Number.isNaN(amount)) return;
+                const label = row[1] || '';
+                const cat = getOrCreateCategoryForLabel(label);
+                parsed.push({
+                    id: Date.now() + index,
+                    date: row[0] || '',
+                    categoryId: cat ? cat.id : null,
+                    categoryLabel: label,
+                    category: label,
+                    note: row[2] || '',
+                    amount: amount,
+                    currency: row[4] || settings.currency
+                });
+            });
+            saveSettings();
+            return parsed;
+        }
+
+        async function replaceLocalWithOnline(spreadsheetId) {
+            const values = await fetchSheetValues(spreadsheetId);
+            if (values.length > 0) settings.googleSheetHasHeader = true;
+            expenses = parseExpensesFromSheet(values);
+            saveExpenses();
+        }
+
+        async function handleInitialGoogleSync() {
+            if (settings.googleInitialSyncDone) return;
+            if (!isOnline) return;
+
+            let existingId = settings.googleSheetId;
+            if (!existingId) {
+                existingId = await findExistingSheetId();
+                if (existingId) {
+                    settings.googleSheetId = existingId;
+                    saveSettings();
+                }
+            }
+
+            if (existingId) {
+                await ensureGoogleSheet();
+                const values = await fetchSheetValues(existingId);
+                const hasData = values.length > 1;
+                if (hasData) {
+                    const useOnline = confirm(
+                        'A backup sheet already exists. OK to replace local data with online data, or Cancel to replace online data with local data.'
+                    );
+                    if (useOnline) {
+                        await replaceLocalWithOnline(existingId);
+                    } else {
+                        await exportToGoogleSheet();
+                    }
+                } else {
+                    await exportToGoogleSheet();
+                }
+            } else {
+                await exportToGoogleSheet();
+            }
+
+            settings.googleInitialSyncDone = true;
+            saveSettings();
+        }
+
+        async function attemptBackgroundSync() {
+            if (!isOnline) return;
+            if (!settings.googleUserInfo) return;
+            if (!settings.googleSheetId) {
+                const existingId = await findExistingSheetId();
+                if (existingId) {
+                    settings.googleSheetId = existingId;
+                    saveSettings();
+                } else {
+                    return;
+                }
+            }
+            if (gapi.client.getToken() === null) return;
+            try {
+                await ensureGoogleSheet();
+                await replaceLocalWithOnline(settings.googleSheetId);
+            } catch (err) {
+                console.warn("Background sync failed", err);
+            }
         }
 
         async function exportToGoogleSheet() {
@@ -1323,6 +1484,8 @@
             const s1 = document.createElement('script'); s1.src = "https://apis.google.com/js/api.js"; s1.onload = gapiLoaded; document.body.appendChild(s1);
             const s2 = document.createElement('script'); s2.src = "https://accounts.google.com/gsi/client"; s2.onload = gisLoaded; document.body.appendChild(s2);
         }
+        window.addEventListener('online', () => { isOnline = true; attemptBackgroundSync(); });
+        window.addEventListener('offline', () => { isOnline = false; });
 
         // --- Swipe, Long Press (Unchanged) ---
         let touchStartX = 0;
@@ -1418,6 +1581,7 @@
 
         function addExpense(e) {
             e.preventDefault();
+            if (!ensureOnlineForEdits()) return;
             const selectedOption = catInput.options[catInput.selectedIndex];
             const categoryLabel = selectedOption ? selectedOption.textContent : '';
             const expense = {
@@ -1482,9 +1646,11 @@
             if (!pendingAction) return;
 
             if (pendingAction.type === 'expense') {
+                if (!ensureOnlineForEdits()) return;
                 expenses = expenses.filter(e => e.id !== pendingAction.id);
                 saveExpenses();
             } else if (pendingAction.type === 'category') {
+                if (!ensureOnlineForEdits()) return;
                 const idx = settings.categories.findIndex(c => c.id === pendingAction.id);
                 if (idx !== -1) {
                     const catId = settings.categories[idx].id;
