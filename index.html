@@ -712,6 +712,20 @@
         </div>
     </div>
 
+    <!-- GOOGLE LOGIN GATE -->
+    <div id="google-gate" class="modal-overlay">
+        <div class="modal-content" style="max-width:360px; text-align:center;">
+            <div class="modal-title" style="margin-bottom:10px;">Connect Google</div>
+            <div style="color:var(--text-muted); margin-bottom:20px;">
+                Link your Google account to use the app across devices.
+            </div>
+            <button onclick="handleGoogleAuth()"
+                style="width:100%; padding:12px; background:#4285F4; color:white; border:none; border-radius:12px; font-weight:600; font-size:16px;">
+                Link Google Account
+            </button>
+        </div>
+    </div>
+
     <!-- TAB BAR -->
     <nav class="tab-bar">
         <button class="tab-btn active" onclick="switchTab('add')">
@@ -810,6 +824,7 @@
         const modalTitle = document.getElementById('modal-title');
 
         const confirmModal = document.getElementById('confirm-modal');
+        const googleGate = document.getElementById('google-gate');
 
         const themeSelect = document.getElementById('theme-select');
         const currencySelect = document.getElementById('currency-select');
@@ -837,6 +852,16 @@
             applyTheme();
             renderCategoryOptions();
             renderManageCategories();
+            enforceGoogleGate();
+        }
+        function enforceGoogleGate() {
+            if (!googleGate) return;
+            const needsAuth = !settings.googleUserInfo || !window.gapi || !gapi.client || gapi.client.getToken() === null;
+            if (needsAuth) {
+                googleGate.classList.add('active');
+            } else {
+                googleGate.classList.remove('active');
+            }
         }
         function ensureOnlineForEdits() {
             if (!isOnline) {
@@ -1620,6 +1645,7 @@
                 statusText.textContent = 'Not connected';
                 statusText.style.color = 'var(--text-muted)';
             }
+            enforceGoogleGate();
         }
         function disconnectGoogleAccount() {
             const token = gapi && gapi.client ? gapi.client.getToken() : null;
