@@ -686,6 +686,10 @@
                         style="width:100%; padding:12px; background:#4285F4; color:white; border:none; border-radius:12px; font-weight:600; font-size:16px;">
                         Link Google Account
                     </button>
+                    <button id="google-disconnect-btn" onclick="disconnectGoogleAccount()"
+                        style="display:none; width:100%; padding:12px; background:var(--bg-input); color:var(--text-main); border:none; border-radius:12px; font-weight:600; font-size:16px; margin-top:10px;">
+                        Disconnect
+                    </button>
                     <button id="google-sync-btn" onclick="exportToGoogleSheet()"
                         style="display:none; width:100%; padding:12px; background:#34A853; color:white; border:none; border-radius:12px; font-weight:600; font-size:16px;">
                         Sync to Sheets
@@ -1513,7 +1517,7 @@
             }
         }
 
-        async function exportToGoogleSheet() {
+        async function exportToGoogleSheet(showAlert = true) {
             if (!settings.googleUserInfo) { handleGoogleAuth(); return; }
 
             const btn = document.getElementById('google-sync-btn');
@@ -1556,7 +1560,9 @@
 
                 settings.googleSheetHasHeader = true;
                 saveSettings();
-                alert(`Success! Saved to "${GOOGLE_SHEET_TITLE}" in your Google Drive.`);
+                if (showAlert) {
+                    alert(`Success! Saved to "${GOOGLE_SHEET_TITLE}" in your Google Drive.`);
+                }
             } catch (err) {
                 console.error("Sync Error", err);
                 alert("Sync failed. See console for details.");
@@ -1571,7 +1577,7 @@
             if (gapi.client.getToken() === null) return false;
 
             try {
-                await exportToGoogleSheet();
+                await exportToGoogleSheet(false);
                 return true;
             } catch (err) {
                 console.error("Auto-sync Error", err);
@@ -1582,14 +1588,14 @@
         async function syncOnlineAfterDelete() {
             if (!settings.googleUserInfo) return;
             if (gapi.client.getToken() === null) return;
-            await exportToGoogleSheet();
+            await exportToGoogleSheet(false);
         }
 
         async function syncCategoriesOnline() {
             if (!settings.googleUserInfo) return;
             if (gapi.client.getToken() === null) return;
             try {
-                await exportToGoogleSheet();
+                await exportToGoogleSheet(false);
             } catch (err) {
                 console.error("Categories sync error", err);
             }
@@ -1597,20 +1603,39 @@
 
         function updateGoogleUI(isConnected) {
             const connectBtn = document.getElementById('google-connect-btn');
+            const disconnectBtn = document.getElementById('google-disconnect-btn');
             const syncBtn = document.getElementById('google-sync-btn');
             const statusText = document.getElementById('google-status');
 
             if (isConnected && settings.googleUserInfo) {
                 connectBtn.style.display = 'none';
                 syncBtn.style.display = 'block';
+                disconnectBtn.style.display = 'block';
                 statusText.innerHTML = `Connected as <b>${settings.googleUserInfo.name}</b>`;
                 statusText.style.color = '#32d74b';
             } else {
                 connectBtn.style.display = 'block';
                 syncBtn.style.display = 'none';
+                disconnectBtn.style.display = 'none';
                 statusText.textContent = 'Not connected';
                 statusText.style.color = 'var(--text-muted)';
             }
+        }
+        function disconnectGoogleAccount() {
+            const token = gapi && gapi.client ? gapi.client.getToken() : null;
+            if (token && token.access_token) {
+                google.accounts.oauth2.revoke(token.access_token, () => {});
+                gapi.client.setToken('');
+            }
+            settings.googleUserInfo = null;
+            settings.googleSheetId = null;
+            settings.googleSheetTabTitle = null;
+            settings.googleSheetHasHeader = false;
+            settings.googleInitialSyncDone = false;
+            saveSettings();
+            expenses = [];
+            saveExpenses();
+            updateGoogleUI(false);
         }
 
         // Load scripts if online
