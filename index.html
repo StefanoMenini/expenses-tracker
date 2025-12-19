@@ -234,6 +234,7 @@
 
         .expense-list {
             padding: 0 20px;
+            padding-bottom: 120px;
         }
 
         .expense-item {
@@ -1331,15 +1332,41 @@
         }
 
         function buildExpenseRow(expense) {
-            const converted = convertAmount(expense.amount, expense.currency || settings.currency, settings.currency);
+            const fromCurrency = expense.currency || settings.currency;
+            const converted = convertAmount(expense.amount, fromCurrency, 'EUR');
+            let categoryName = '';
+            let subcategoryName = '';
+            if (expense.categoryId) {
+                const cat = getCategoryById(expense.categoryId);
+                if (cat && cat.parentId) {
+                    const parent = getCategoryById(cat.parentId);
+                    categoryName = parent ? parent.name : '';
+                    subcategoryName = cat.name;
+                } else if (cat) {
+                    categoryName = cat.name;
+                }
+            }
+            if (!categoryName) {
+                const label = getExpenseCategoryLabel(expense);
+                if (label.includes('>')) {
+                    const parts = label.split('>').map(part => part.trim()).filter(Boolean);
+                    categoryName = parts[0] || '';
+                    subcategoryName = parts.slice(1).join(' > ');
+                } else {
+                    categoryName = label;
+                }
+            }
+            const originalAmount = fromCurrency !== 'EUR' ? expense.amount : '';
+            const originalCurrency = fromCurrency !== 'EUR' ? fromCurrency : '';
             return [
                 expense.date,
-                getExpenseCategoryLabel(expense),
+                categoryName,
+                subcategoryName,
                 expense.note || "",
-                expense.amount,
-                expense.currency || settings.currency,
                 converted.toFixed(2),
-                settings.currency
+                'EUR',
+                originalAmount,
+                originalCurrency
             ];
         }
         function buildCategoryRows() {
@@ -1450,20 +1477,25 @@
             const rows = values.slice(1);
             const parsed = [];
             rows.forEach((row, index) => {
-                if (!row || row.length < 4) return;
-                const amount = parseFloat(row[3]);
-                if (Number.isNaN(amount)) return;
-                const label = row[1] || '';
+                if (!row || row.length < 6) return;
+                const amountEur = parseFloat(row[4]);
+                if (Number.isNaN(amountEur)) return;
+                const categoryName = row[1] || '';
+                const subcategoryName = row[2] || '';
+                const label = subcategoryName ? `${categoryName} > ${subcategoryName}` : categoryName;
                 const cat = getOrCreateCategoryForLabel(label);
+                const originalAmount = parseFloat(row[6]);
+                const originalCurrency = row[7] || '';
+                const hasOriginal = !Number.isNaN(originalAmount) && originalCurrency;
                 parsed.push({
                     id: Date.now() + index,
                     date: row[0] || '',
                     categoryId: cat ? cat.id : null,
                     categoryLabel: label,
                     category: label,
-                    note: row[2] || '',
-                    amount: amount,
-                    currency: row[4] || settings.currency
+                    note: row[3] || '',
+                    amount: hasOriginal ? originalAmount : amountEur,
+                    currency: hasOriginal ? originalCurrency : 'EUR'
                 });
             });
             saveSettings();
@@ -1555,7 +1587,7 @@
                 const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
                 const categoriesTitle = GOOGLE_CATEGORIES_TAB;
 
-                const headers = ["Date", "Category", "Note", "Amount", "Currency", "Converted Amount", "Main Currency"];
+                const headers = ["Date", "Category", "Subcategory", "Note", "Amount (EUR)", "Currency (EUR)", "Original Amount", "Original Currency"];
                 const rows = expenses.map(buildExpenseRow);
                 const values = [headers, ...rows];
 
