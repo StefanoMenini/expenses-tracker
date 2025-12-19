@@ -735,7 +735,7 @@
 
     <script>
         // State
-        let expenses = JSON.parse(localStorage.getItem('expenses')) || [];
+        let expenses = [];
         // Default Settings
         const defaultSettings = {
             currency: 'EUR',
@@ -811,6 +811,7 @@
             if (!settings.googleSheetTabTitle) settings.googleSheetTabTitle = null;
             if (!settings.googleSheetHasHeader) settings.googleSheetHasHeader = false;
             if (!settings.googleInitialSyncDone) settings.googleInitialSyncDone = false;
+            localStorage.removeItem('expenses');
             themeSelect.value = settings.theme;
             currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
@@ -821,6 +822,11 @@
         function ensureOnlineForEdits() {
             if (!isOnline) {
                 alert('You are offline. Edits are disabled until you are back online.');
+                return false;
+            }
+            if (!settings.googleUserInfo || !window.gapi || !gapi.client || gapi.client.getToken() === null) {
+                alert('Please connect your Google account to edit data.');
+                handleGoogleAuth();
                 return false;
             }
             return true;
@@ -886,6 +892,9 @@
             if (expense.categoryLabel) return expense.categoryLabel;
             return expense.category || 'Uncategorized';
         }
+        function getCategoryById(categoryId) {
+            return settings.categories.find(c => c.id === categoryId);
+        }
         function getOrCreateCategoryForLabel(label) {
             if (!label) return null;
             const trimmed = label.trim();
@@ -917,6 +926,7 @@
             return newCat;
         }
         function migrateExpensesCategories() {
+            if (expenses.length === 0) return;
             let settingsChanged = false;
             let expensesChanged = false;
             const categoryByName = new Map(settings.categories.map(cat => [cat.name, cat]));
@@ -1013,6 +1023,7 @@
             saveSettings();
             renderCategoryOptions();
             renderManageCategories();
+            syncCategoriesOnline();
             newCatName.value = '';
         }
         function removeCategory(index) {
@@ -1040,6 +1051,7 @@
             renderCategoryOptions();
             renderManageCategories();
             renderRecap();
+            syncCategoriesOnline();
         }
         function buildCategoryItem(cat, depth) {
             const el = document.createElement('div');
@@ -1136,6 +1148,7 @@
         const GOOGLE_SCOPES = 'openid profile email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly';
         const GOOGLE_SHEET_TITLE = 'Expense Tracker Backup';
         const GOOGLE_SHEET_TAB = 'Expenses';
+        const GOOGLE_CATEGORIES_TAB = 'Categories';
         let tokenClient;
         let gapiInited = false;
         let gisInited = false;
@@ -1246,6 +1259,15 @@
                 settings.currency
             ];
         }
+        function buildCategoryRows() {
+            const headers = ["Id", "Name", "Parent Id"];
+            const rows = settings.categories.map(cat => [
+                cat.id,
+                cat.name,
+                cat.parentId || ""
+            ]);
+            return [headers, ...rows];
+        }
 
         async function findExistingSheetId() {
             try {
@@ -1272,9 +1294,19 @@
                         spreadsheetId: settings.googleSheetId,
                         fields: 'sheets.properties.title'
                     });
-                    const tabTitle = sheetResp.result.sheets && sheetResp.result.sheets[0]
-                        ? sheetResp.result.sheets[0].properties.title
-                        : GOOGLE_SHEET_TAB;
+                    const sheets = sheetResp.result.sheets || [];
+                    const tabTitle = sheets[0] ? sheets[0].properties.title : GOOGLE_SHEET_TAB;
+                    const hasCategoriesTab = sheets.some(s => s.properties.title === GOOGLE_CATEGORIES_TAB);
+                    if (!hasCategoriesTab) {
+                        await gapi.client.sheets.spreadsheets.batchUpdate({
+                            spreadsheetId: settings.googleSheetId,
+                            resource: {
+                                requests: [{
+                                    addSheet: { properties: { title: GOOGLE_CATEGORIES_TAB } }
+                                }]
+                            }
+                        });
+                    }
                     settings.googleSheetTabTitle = tabTitle;
                     saveSettings();
                     return settings.googleSheetId;
@@ -1289,7 +1321,10 @@
 
             const createResp = await gapi.client.sheets.spreadsheets.create({
                 properties: { title: GOOGLE_SHEET_TITLE },
-                sheets: [{ properties: { title: GOOGLE_SHEET_TAB } }]
+                sheets: [
+                    { properties: { title: GOOGLE_SHEET_TAB } },
+                    { properties: { title: GOOGLE_CATEGORIES_TAB } }
+                ]
             });
             settings.googleSheetId = createResp.result.spreadsheetId;
             settings.googleSheetTabTitle = createResp.result.sheets && createResp.result.sheets[0]
@@ -1300,13 +1335,31 @@
             return settings.googleSheetId;
         }
 
-        async function fetchSheetValues(spreadsheetId) {
-            const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
+        async function fetchSheetValues(spreadsheetId, sheetTitle) {
             const resp = await gapi.client.sheets.spreadsheets.values.get({
                 spreadsheetId: spreadsheetId,
                 range: `${sheetTitle}!A1:Z`
             });
             return resp.result.values || [];
+        }
+
+        function parseCategoriesFromSheet(values) {
+            if (!values || values.length === 0) return;
+            const rows = values.slice(1);
+            const parsed = [];
+            rows.forEach((row) => {
+                if (!row || row.length < 2) return;
+                const id = row[0] || makeCategoryId();
+                const name = row[1] || 'Unnamed';
+                const parentId = row[2] || null;
+                parsed.push({ id, name, parentId: parentId || null });
+            });
+            if (parsed.length > 0) {
+                settings.categories = parsed;
+                saveSettings();
+                renderCategoryOptions();
+                renderManageCategories();
+            }
         }
 
         function parseExpensesFromSheet(values) {
@@ -1335,7 +1388,10 @@
         }
 
         async function replaceLocalWithOnline(spreadsheetId) {
-            const values = await fetchSheetValues(spreadsheetId);
+            const categoriesValues = await fetchSheetValues(spreadsheetId, GOOGLE_CATEGORIES_TAB);
+            if (categoriesValues.length > 0) parseCategoriesFromSheet(categoriesValues);
+
+            const values = await fetchSheetValues(spreadsheetId, settings.googleSheetTabTitle || GOOGLE_SHEET_TAB);
             if (values.length > 0) settings.googleSheetHasHeader = true;
             expenses = parseExpensesFromSheet(values);
             saveExpenses();
@@ -1356,16 +1412,20 @@
 
             if (existingId) {
                 await ensureGoogleSheet();
-                const values = await fetchSheetValues(existingId);
+                const values = await fetchSheetValues(existingId, settings.googleSheetTabTitle || GOOGLE_SHEET_TAB);
                 const hasData = values.length > 1;
                 if (hasData) {
-                    const useOnline = confirm(
-                        'A backup sheet already exists. OK to replace local data with online data, or Cancel to replace online data with local data.'
-                    );
-                    if (useOnline) {
+                    if (expenses.length === 0) {
                         await replaceLocalWithOnline(existingId);
                     } else {
-                        await exportToGoogleSheet();
+                        const useOnline = confirm(
+                            'A backup sheet already exists. OK to replace local data with online data, or Cancel to replace online data with local data.'
+                        );
+                        if (useOnline) {
+                            await replaceLocalWithOnline(existingId);
+                        } else {
+                            await exportToGoogleSheet();
+                        }
                     }
                 } else {
                     await exportToGoogleSheet();
@@ -1410,6 +1470,7 @@
             try {
                 const spreadsheetId = await ensureGoogleSheet();
                 const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
+                const categoriesTitle = GOOGLE_CATEGORIES_TAB;
 
                 const headers = ["Date", "Category", "Note", "Amount", "Currency", "Converted Amount", "Main Currency"];
                 const rows = expenses.map(buildExpenseRow);
@@ -1427,6 +1488,18 @@
                     resource: { values: values }
                 });
 
+                await gapi.client.sheets.spreadsheets.values.clear({
+                    spreadsheetId: spreadsheetId,
+                    range: `${categoriesTitle}!A1:Z`
+                });
+
+                await gapi.client.sheets.spreadsheets.values.update({
+                    spreadsheetId: spreadsheetId,
+                    range: `${categoriesTitle}!A1`,
+                    valueInputOption: 'USER_ENTERED',
+                    resource: { values: buildCategoryRows() }
+                });
+
                 settings.googleSheetHasHeader = true;
                 saveSettings();
                 alert(`Success! Saved to "${GOOGLE_SHEET_TITLE}" in your Google Drive.`);
@@ -1440,8 +1513,8 @@
         }
 
         async function autoAppendExpense(expense) {
-            if (!settings.googleUserInfo) return;
-            if (gapi.client.getToken() === null) return;
+            if (!settings.googleUserInfo) return false;
+            if (gapi.client.getToken() === null) return false;
 
             try {
                 const spreadsheetId = await ensureGoogleSheet();
@@ -1449,7 +1522,7 @@
 
                 if (!settings.googleSheetHasHeader) {
                     await exportToGoogleSheet();
-                    return;
+                    return true;
                 }
 
                 await gapi.client.sheets.spreadsheets.values.append({
@@ -1459,8 +1532,36 @@
                     insertDataOption: 'INSERT_ROWS',
                     resource: { values: [buildExpenseRow(expense)] }
                 });
+                return true;
             } catch (err) {
                 console.error("Auto-sync Error", err);
+                return false;
+            }
+        }
+
+        async function syncOnlineAfterDelete() {
+            if (!settings.googleUserInfo) return;
+            if (gapi.client.getToken() === null) return;
+            await exportToGoogleSheet();
+        }
+
+        async function syncCategoriesOnline() {
+            if (!settings.googleUserInfo) return;
+            if (gapi.client.getToken() === null) return;
+            try {
+                const spreadsheetId = await ensureGoogleSheet();
+                await gapi.client.sheets.spreadsheets.values.clear({
+                    spreadsheetId: spreadsheetId,
+                    range: `${GOOGLE_CATEGORIES_TAB}!A1:Z`
+                });
+                await gapi.client.sheets.spreadsheets.values.update({
+                    spreadsheetId: spreadsheetId,
+                    range: `${GOOGLE_CATEGORIES_TAB}!A1`,
+                    valueInputOption: 'USER_ENTERED',
+                    resource: { values: buildCategoryRows() }
+                });
+            } catch (err) {
+                console.error("Categories sync error", err);
             }
         }
 
@@ -1578,11 +1679,10 @@
         }
 
         function saveExpenses() {
-            localStorage.setItem('expenses', JSON.stringify(expenses));
             renderRecap();
         }
 
-        function addExpense(e) {
+        async function addExpense(e) {
             e.preventDefault();
             if (!ensureOnlineForEdits()) return;
             const selectedOption = catInput.options[catInput.selectedIndex];
@@ -1597,8 +1697,15 @@
                 date: dateInput.value,
                 note: noteInput.value
             };
-            expenses.unshift(expense); saveExpenses();
-            autoAppendExpense(expense);
+            expenses.unshift(expense);
+            saveExpenses();
+            const appended = await autoAppendExpense(expense);
+            if (!appended) {
+                expenses = expenses.filter(e => e.id !== expense.id);
+                saveExpenses();
+                alert('Sync failed. Expense was not saved.');
+                return;
+            }
             amountInput.value = ''; noteInput.value = ''; dateInput.valueAsDate = new Date();
             const btn = form.querySelector('button'); const originalText = btn.textContent; btn.textContent = 'Saved!'; btn.style.background = '#32d74b';
             setTimeout(() => { btn.textContent = originalText; btn.style.background = ''; }, 1500);
@@ -1652,6 +1759,7 @@
                 if (!ensureOnlineForEdits()) return;
                 expenses = expenses.filter(e => e.id !== pendingAction.id);
                 saveExpenses();
+                syncOnlineAfterDelete();
             } else if (pendingAction.type === 'category') {
                 if (!ensureOnlineForEdits()) return;
                 const idx = settings.categories.findIndex(c => c.id === pendingAction.id);
@@ -1663,6 +1771,7 @@
                 saveSettings();
                 renderCategoryOptions();
                 renderManageCategories();
+                syncCategoriesOnline();
             } else if (pendingAction.type === 'restore') {
                 // Restore Logic
                 if (window.pendingImportData) {
