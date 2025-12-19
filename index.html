@@ -1334,6 +1334,7 @@
         function buildExpenseRow(expense) {
             const fromCurrency = expense.currency || settings.currency;
             const converted = convertAmount(expense.amount, fromCurrency, 'EUR');
+            const roundedConverted = Math.round((converted + Number.EPSILON) * 100) / 100;
             let categoryName = '';
             let subcategoryName = '';
             if (expense.categoryId) {
@@ -1363,7 +1364,7 @@
                 categoryName,
                 subcategoryName,
                 expense.note || "",
-                converted.toFixed(2),
+                roundedConverted,
                 'EUR',
                 originalAmount,
                 originalCurrency
