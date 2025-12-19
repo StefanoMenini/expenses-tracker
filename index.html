@@ -523,6 +523,21 @@
             justify-content: center;
         }
 
+        .edit-btn {
+            background: var(--bg-input);
+            color: var(--text-main);
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         .add-cat-form {
             display: flex;
             gap: 10px;
@@ -1053,6 +1068,39 @@
             renderRecap();
             syncCategoriesOnline();
         }
+        function renameCategory(catId) {
+            if (!ensureOnlineForEdits()) return;
+            const cat = settings.categories.find(c => c.id === catId);
+            if (!cat) return;
+            const nextName = prompt('New category name:', cat.name);
+            if (!nextName) return;
+            const trimmed = nextName.trim();
+            if (!trimmed) return;
+            const exists = settings.categories.some(c => c.id !== catId && c.name.toLowerCase() === trimmed.toLowerCase());
+            if (exists) {
+                alert('A category with this name already exists.');
+                return;
+            }
+            const oldLabel = getCategoryDisplayLabel(cat);
+            cat.name = trimmed;
+            saveSettings();
+
+            expenses.forEach(expense => {
+                if (expense.categoryId === catId) {
+                    expense.categoryLabel = getExpenseCategoryLabel(expense);
+                    expense.category = expense.categoryLabel;
+                } else if (!expense.categoryId && expense.categoryLabel === oldLabel) {
+                    expense.categoryLabel = trimmed;
+                    expense.category = trimmed;
+                }
+            });
+            saveExpenses();
+
+            renderCategoryOptions();
+            renderManageCategories();
+            renderRecap();
+            syncCategoriesOnline();
+        }
         function buildCategoryItem(cat, depth) {
             const el = document.createElement('div');
             el.className = `cat-manage-item${depth === 1 ? ' is-child' : ''}`;
@@ -1075,7 +1123,13 @@
             delBtn.textContent = '×';
             delBtn.onclick = () => removeCategory(cat.id);
 
+            const editBtn = document.createElement('button');
+            editBtn.className = 'edit-btn';
+            editBtn.textContent = '✎';
+            editBtn.onclick = () => renameCategory(cat.id);
+
             el.appendChild(nameWrap);
+            el.appendChild(editBtn);
             el.appendChild(delBtn);
 
             el.addEventListener('dragstart', onCategoryDragStart);
@@ -1517,21 +1571,7 @@
             if (gapi.client.getToken() === null) return false;
 
             try {
-                const spreadsheetId = await ensureGoogleSheet();
-                const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
-
-                if (!settings.googleSheetHasHeader) {
-                    await exportToGoogleSheet();
-                    return true;
-                }
-
-                await gapi.client.sheets.spreadsheets.values.append({
-                    spreadsheetId: spreadsheetId,
-                    range: `${sheetTitle}!A1`,
-                    valueInputOption: 'USER_ENTERED',
-                    insertDataOption: 'INSERT_ROWS',
-                    resource: { values: [buildExpenseRow(expense)] }
-                });
+                await exportToGoogleSheet();
                 return true;
             } catch (err) {
                 console.error("Auto-sync Error", err);
@@ -1549,17 +1589,7 @@
             if (!settings.googleUserInfo) return;
             if (gapi.client.getToken() === null) return;
             try {
-                const spreadsheetId = await ensureGoogleSheet();
-                await gapi.client.sheets.spreadsheets.values.clear({
-                    spreadsheetId: spreadsheetId,
-                    range: `${GOOGLE_CATEGORIES_TAB}!A1:Z`
-                });
-                await gapi.client.sheets.spreadsheets.values.update({
-                    spreadsheetId: spreadsheetId,
-                    range: `${GOOGLE_CATEGORIES_TAB}!A1`,
-                    valueInputOption: 'USER_ENTERED',
-                    resource: { values: buildCategoryRows() }
-                });
+                await exportToGoogleSheet();
             } catch (err) {
                 console.error("Categories sync error", err);
             }
