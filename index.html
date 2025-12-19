@@ -775,13 +775,32 @@
             currency: 'EUR',
             theme: 'system', // 'light', 'dark', 'system'
             categories: [
-                { id: 'cat_food', name: "🍔 Food", parentId: null },
-                { id: 'cat_transport', name: "🚌 Transport", parentId: null },
-                { id: 'cat_shopping', name: "🛍️ Shopping", parentId: null },
-                { id: 'cat_entertainment', name: "🎬 Entertainment", parentId: null },
-                { id: 'cat_bills', name: "🧾 Bills", parentId: null },
-                { id: 'cat_health', name: "💊 Health", parentId: null },
-                { id: 'cat_other', name: "🔹 Other", parentId: null }
+                { id: 'cat_1', name: "🛒 Spesa", parentId: null },
+                { id: 'cat_2', name: "🚌 Trasporti", parentId: null },
+                { id: 'cat_3', name: "🎬 Svago", parentId: null },
+                { id: 'cat_4', name: "🧘‍♂️ Pause", parentId: null },
+                { id: 'cat_5', name: "🧾 Conti", parentId: null },
+                { id: 'cat_6', name: "💊 Salute", parentId: null },
+                { id: 'cat_7', name: "🪩 Sociale", parentId: null },
+                { id: 'cat_8', name: "💈 Barbiere", parentId: null },
+                { id: 'cat_9', name: "❓Altro", parentId: null },
+                { id: 'cat_10', name: "🍝 Alimentari", parentId: 'cat_1' },
+                { id: 'cat_11', name: "🍿 Snack", parentId: 'cat_1' },
+                { id: 'cat_12', name: "🧴 Cura Personale", parentId: 'cat_1' },
+                { id: 'cat_13', name: "🫧nProdotti Casa", parentId: 'cat_1' },
+                { id: 'cat_14', name: "😸 Gatto", parentId: 'cat_1' },
+                { id: 'cat_15', name: "⛽️ Benzina", parentId: 'cat_2' },
+                { id: 'cat_16', name: "🚂 Treni", parentId: 'cat_2' },
+                { id: 'cat_17', name: "🚌 Autobus", parentId: 'cat_2' },
+                { id: 'cat_18', name: "🛣️ Autostrada", parentId: 'cat_2' },
+                { id: 'cat_19', name: "🚙 Auto", parentId: 'cat_2' },
+                { id: 'cat_20', name: "👾 Videogiochi", parentId: 'cat_3' },
+                { id: 'cat_21', name: "🎁 Regali", parentId: 'cat_3' },
+                { id: 'cat_22', name: "🎲 Hobby", parentId: 'cat_3' },
+                { id: 'cat_23', name: "☕️ Caffè", parentId: 'cat_4' },
+                { id: 'cat_24', name: "🥐 Merende", parentId: 'cat_4' },
+                { id: 'cat_25', name: "💸 Utenze", parentId: 'cat_5' },
+                { id: 'cat_26', name: "📝 Assicurazione", parentId: 'cat_5' }
             ]
         };
         let settings = JSON.parse(localStorage.getItem('settings')) || defaultSettings;
