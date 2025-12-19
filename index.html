@@ -1200,6 +1200,9 @@
                     properties: { title: title }
                 });
                 const spreadsheetId = createResp.result.spreadsheetId;
+                const sheetTitle = createResp.result.sheets && createResp.result.sheets[0]
+                    ? createResp.result.sheets[0].properties.title
+                    : 'Sheet1';
 
                 // 3. Prepare Data
                 const headers = ["Date", "Category", "Note", "Amount", "Currency", "Converted Amount", "Main Currency"];
@@ -1220,7 +1223,7 @@
                 // 4. Write Data
                 await gapi.client.sheets.spreadsheets.values.update({
                     spreadsheetId: spreadsheetId,
-                    range: 'Sheet1!A1',
+                    range: `${sheetTitle}!A1`,
                     valueInputOption: 'USER_ENTERED',
                     resource: { values: values }
                 });
