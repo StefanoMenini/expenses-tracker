@@ -653,6 +653,20 @@
             </div>
 
 
+            <h3>Currency</h3>
+            <div class="settings-section">
+                <div class="form-group" style="margin:0; padding:10px;">
+                    <select id="currency-select" onchange="updateCurrency()">
+                        <option value="EUR">EUR (€)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="GBP">GBP (£)</option>
+                        <option value="JPY">JPY (¥)</option>
+                        <option value="CAD">CAD ($)</option>
+                        <option value="AUD">AUD ($)</option>
+                        <option value="INR">INR (₹)</option>
+                    </select>
+                </div>
+            </div>
             <h3>Categories</h3>
             <div id="cat-dropzone" class="cat-dropzone">Drop here to make top-level</div>
             <div id="cat-manage-list" class="settings-section cat-manage-list">
@@ -814,6 +828,7 @@
         const googleGate = document.getElementById('google-gate');
 
         const themeSelect = document.getElementById('theme-select');
+        const currencySelect = document.getElementById('currency-select');
         const catManageList = document.getElementById('cat-manage-list');
         const catDropzone = document.getElementById('cat-dropzone');
         const newCatName = document.getElementById('new-cat-name');
@@ -832,8 +847,8 @@
             if (!settings.googleSheetHasHeader) settings.googleSheetHasHeader = false;
             if (!settings.googleInitialSyncDone) settings.googleInitialSyncDone = false;
             localStorage.removeItem('expenses');
-            settings.currency = 'EUR';
             themeSelect.value = settings.theme;
+            currencySelect.value = settings.currency;
             if (currencyInput) currencyInput.value = settings.currency;
             applyTheme();
             renderCategoryOptions();
@@ -1014,6 +1029,7 @@
             }
             document.body.setAttribute('data-theme', targetTheme);
         }
+        function updateCurrency() { settings.currency = currencySelect.value; saveSettings(); if (currencyInput) currencyInput.value = settings.currency; renderRecap(); }
         function renderCategoryOptions() {
             catInput.innerHTML = '';
             const topLevel = getTopLevelCategories();
@@ -1343,7 +1359,6 @@
             const originalAmount = fromCurrency !== 'EUR' ? expense.amount : '';
             const originalCurrency = fromCurrency !== 'EUR' ? fromCurrency : '';
             return [
-                String(expense.id),
                 expense.date,
                 categoryName,
                 subcategoryName,
@@ -1353,23 +1368,6 @@
                 originalAmount,
                 originalCurrency
             ];
-        }
-        function mergeExpenses(onlineExpenses, localExpenses) {
-            const mergedMap = new Map();
-            onlineExpenses.forEach(expense => mergedMap.set(String(expense.id), expense));
-            localExpenses.forEach(expense => {
-                const key = String(expense.id);
-                if (!mergedMap.has(key)) mergedMap.set(key, expense);
-            });
-            return Array.from(mergedMap.values());
-        }
-        function mergeCategories(onlineCategories, localCategories) {
-            const mergedMap = new Map();
-            onlineCategories.forEach(cat => mergedMap.set(cat.id, cat));
-            localCategories.forEach(cat => {
-                if (!mergedMap.has(cat.id)) mergedMap.set(cat.id, cat);
-            });
-            return Array.from(mergedMap.values());
         }
         function buildCategoryRows() {
             const headers = ["Id", "Name", "Parent Id"];
@@ -1476,29 +1474,26 @@
 
         function parseExpensesFromSheet(values) {
             if (!values || values.length === 0) return [];
-            const headerRow = values[0] || [];
-            const hasIdColumn = headerRow[0] === 'Id';
-            const offset = hasIdColumn ? 1 : 0;
             const rows = values.slice(1);
             const parsed = [];
             rows.forEach((row, index) => {
-                if (!row || row.length < 6 + offset) return;
-                const amountEur = parseFloat(row[4 + offset]);
+                if (!row || row.length < 6) return;
+                const amountEur = parseFloat(row[4]);
                 if (Number.isNaN(amountEur)) return;
-                const categoryName = row[1 + offset] || '';
-                const subcategoryName = row[2 + offset] || '';
+                const categoryName = row[1] || '';
+                const subcategoryName = row[2] || '';
                 const label = subcategoryName ? `${categoryName} > ${subcategoryName}` : categoryName;
                 const cat = getOrCreateCategoryForLabel(label);
-                const originalAmount = parseFloat(row[6 + offset]);
-                const originalCurrency = row[7 + offset] || '';
+                const originalAmount = parseFloat(row[6]);
+                const originalCurrency = row[7] || '';
                 const hasOriginal = !Number.isNaN(originalAmount) && originalCurrency;
                 parsed.push({
-                    id: hasIdColumn ? row[0] : String(Date.now() + index),
-                    date: row[0 + offset] || '',
+                    id: Date.now() + index,
+                    date: row[0] || '',
                     categoryId: cat ? cat.id : null,
                     categoryLabel: label,
                     category: label,
-                    note: row[3 + offset] || '',
+                    note: row[3] || '',
                     amount: hasOriginal ? originalAmount : amountEur,
                     currency: hasOriginal ? originalCurrency : 'EUR'
                 });
@@ -1592,21 +1587,7 @@
                 const sheetTitle = settings.googleSheetTabTitle || GOOGLE_SHEET_TAB;
                 const categoriesTitle = GOOGLE_CATEGORIES_TAB;
 
-                const onlineCategoriesValues = await fetchSheetValues(spreadsheetId, categoriesTitle);
-                const onlineExpensesValues = await fetchSheetValues(spreadsheetId, sheetTitle);
-                const onlineCategories = onlineCategoriesValues.length > 0 ? onlineCategoriesValues.slice(1).map(row => ({
-                    id: row[0],
-                    name: row[1],
-                    parentId: row[2] || null
-                })) : [];
-                const onlineExpenses = parseExpensesFromSheet(onlineExpensesValues);
-
-                settings.categories = mergeCategories(onlineCategories, settings.categories);
-                expenses = mergeExpenses(onlineExpenses, expenses);
-                saveSettings();
-                saveExpenses();
-
-                const headers = ["Id", "Date", "Category", "Subcategory", "Note", "Amount (EUR)", "Currency (EUR)", "Original Amount", "Original Currency"];
+                const headers = ["Date", "Category", "Subcategory", "Note", "Amount (EUR)", "Currency (EUR)", "Original Amount", "Original Currency"];
                 const rows = expenses.map(buildExpenseRow);
                 const values = [headers, ...rows];
 
@@ -2083,24 +2064,15 @@
             }
         }
 
-        async function switchTab(tabName) {
+        function switchTab(tabName) {
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
             let idx = 0; if (tabName === 'recap') idx = 1; if (tabName === 'settings') idx = 2;
             document.querySelectorAll('.tab-btn')[idx].classList.add('active');
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById(`view-${tabName}`).classList.add('active');
-            if (tabName === 'recap' || tabName === 'settings') {
-                if (isOnline && settings.googleUserInfo && gapi && gapi.client && gapi.client.getToken() !== null) {
-                    try {
-                        await replaceLocalWithOnline(settings.googleSheetId || await ensureGoogleSheet());
-                    } catch (err) {
-                        console.warn(`${tabName} sync failed`, err);
-                    }
-                }
-                if (tabName === 'recap') {
-                    displayLimit = LIMIT_STEP; // Reset
-                    renderRecap();
-                }
+            if (tabName === 'recap') {
+                displayLimit = LIMIT_STEP; // Reset
+                renderRecap();
             }
         }
 
